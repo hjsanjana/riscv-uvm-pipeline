@@ -441,6 +441,288 @@ That's it! You now understand:
 - what UVM is and what each piece (driver/monitor/scoreboard/coverage) does
 - how to actually run the simulation yourself
 
+---
+
+## 8. A closer look: the exact logic inside the code
+
+Everything so far has been the *concept*. This section opens the hood and
+traces the **actual logic that exists in the source files**, with line
+numbers so you can follow along. No artistic license here — if the diagram
+shows a decision, that decision exists in the code at that link.
+
+> [!NOTE]
+> This project does **not** use SystemVerilog Assertions (`assert
+> property ...`) anywhere. The closest thing to "assertions" is the
+> scoreboard's checking chain — see the diagram in the
+> ["scoreboard's checking chain"](#the-scoreboards-checking-chain-this-projects-assertions)
+> section below.
+
+### Instruction decode — opcode to control signals
+
+The ID stage looks at the 7-bit opcode and switches on it to set every
+control signal for the rest of the pipeline in one shot.
+
+```mermaid
+flowchart TD
+    OP["opcode_d = instr_d[6:0]"]:::id
+    OP --> C{"case (opcode_d)"}:::id
+    C -- "OP_RTYPE" --> R["reg_we_d=1<br/>funct7+funct3 select alu_op_d<br/>(ADD/SUB/AND/OR/XOR/SLT/SLL/SRL/SRA)"]:::good
+    C -- "OP_ITYPE" --> I["reg_we_d=1, alu_src_d=1<br/>funct3 selects alu_op_d<br/>(ADDI/ANDI/ORI/XORI/SLTI/SLLI/SRLI/SRAI)"]:::good
+    C -- "OP_LOAD" --> L["reg_we_d=1, mem_re_d=1<br/>alu_src_d=1, imm_d=imm_i"]:::good
+    C -- "OP_STORE" --> S["mem_we_d=1, alu_src_d=1<br/>imm_d=imm_s"]:::good
+    C -- "OP_BRANCH" --> B["branch_d=1, imm_d=imm_b<br/>funct3 selects compare mode"]:::good
+    C -- "OP_JAL / OP_JALR" --> J["reg_we_d=1<br/>jal_d=1 or jalr_d=1"]:::good
+    C -- "OP_LUI / OP_AUIPC" --> U["reg_we_d=1<br/>lui_d=1 or auipc_d=1, imm_d=imm_u"]:::good
+    C -- "anything else, or a<br/>bad funct3/funct7" --> X["illegal_d = 1"]:::bad
+
+    classDef id fill:#66bb6a,color:#fff,stroke:#2e7d32,stroke-width:2px
+    classDef good fill:#c8e6c9,stroke:#2e7d32,color:#000,stroke-width:2px
+    classDef bad fill:#ef9a9a,stroke:#c62828,color:#000,stroke-width:2px
+```
+
+Reference: [`rtl/riscv_core.sv` lines 127–194](rtl/riscv_core.sv#L127-L194).
+
+### The forwarding unit's priority logic
+
+This is the real priority order coded into the forwarding mux for `rs1_e`
+(the exact same logic runs again, independently, for `rs2_e`).
+
+```mermaid
+flowchart TD
+    Start["Resolving rs1_e for the EX stage"]:::ex
+    Start --> Q1{"reg_we_m && rd_m!=0<br/>&& rd_m==rs1_e ?<br/>(EX/MEM latch)"}:::ex
+    Q1 -- "Yes — highest priority" --> A1["fwd_a = alu_result_m_fwd"]:::good
+    Q1 -- "No" --> Q2{"reg_we_w && rd_w!=0<br/>&& rd_w==rs1_e ?<br/>(MEM/WB latch)"}:::ex
+    Q2 -- "Yes" --> A2["fwd_a = wb_data_fwd"]:::good
+    Q2 -- "No" --> A3["fwd_a = rs1_data_e<br/>(plain register-file read)"]:::neutral
+
+    classDef ex fill:#fdd835,color:#000,stroke:#f9a825,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+    classDef neutral fill:#eceff1,stroke:#607d8b,color:#000,stroke-width:2px
+```
+
+> [!TIP]
+> Notice the EX/MEM check happens **first**. If both the EX/MEM and
+> MEM/WB latches happen to target the same register, the EX/MEM value
+> wins because it's the more recent write — getting this priority
+> backwards is one of the most common forwarding-unit bugs.
+
+Reference: [`rtl/riscv_core.sv` lines 261–287](rtl/riscv_core.sv#L261-L287).
+
+### Load-use hazard detection (the stall condition)
+
+This is the literal boolean expression that decides whether to stall —
+not a simplification of it.
+
+```mermaid
+flowchart TD
+    Q1{"Is the EX-stage instruction<br/>a LOAD? (mem_re_e)"}:::ex
+    Q1 -- "No" --> N["stall_d = 0<br/>pipeline advances normally"]:::good
+    Q1 -- "Yes" --> Q2{"Does the ID-stage instruction<br/>read that same register?<br/>(rd_e==rs1_d || rd_e==rs2_d)"}:::ex
+    Q2 -- "No" --> N
+    Q2 -- "Yes" --> Q3{"Is that register x0?<br/>(rd_e != 0)"}:::ex
+    Q3 -- "It is x0 — ignore" --> N
+    Q3 -- "Real register" --> S["stall_d=1, stall_f=1<br/>freeze PC + IF/ID,<br/>bubble goes into ID/EX"]:::bad
+
+    classDef ex fill:#fdd835,color:#000,stroke:#f9a825,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+    classDef bad fill:#ef9a9a,stroke:#c62828,color:#000,stroke-width:2px
+```
+
+Reference: [`rtl/riscv_core.sv` lines 209–214](rtl/riscv_core.sv#L209-L214).
+
+### Branch resolution and the flush condition
+
+```mermaid
+flowchart TD
+    K{"What's in the EX stage?"}:::ex
+    K -- "BEQ / BNE / BLT / BGE" --> CC["Evaluate branch_cond_e from<br/>funct3_e + alu_result_e"]:::ex
+    CC --> TT{"branch_e AND<br/>branch_cond_e ?"}:::ex
+    TT -- "Yes" --> TAKE["branch_taken_e = 1"]:::bad
+    TT -- "No" --> NOTAKE["branch_taken_e = 0"]:::good
+    K -- "JAL or JALR" --> ALWAYS["branch_taken_e = 1<br/>(always — unconditional)"]:::bad
+    K -- "anything else" --> NOTAKE
+
+    NOTAKE --> CONT["Keep fetching PC+4,<br/>no flush"]:::good
+    TAKE --> TGT{"jalr_e ?"}:::ex
+    ALWAYS --> TGT
+    TGT -- "Yes" --> JT["branch_target_e =<br/>(fwd_a + imm_e) & ~1"]:::good
+    TGT -- "No" --> AT["branch_target_e =<br/>pc_e + imm_e"]:::good
+    JT --> FL["flush_e=1, flush_d=1<br/>discard the 2 wrongly-fetched<br/>instructions, refetch at target"]:::bad
+    AT --> FL
+
+    classDef ex fill:#fdd835,color:#000,stroke:#f9a825,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+    classDef bad fill:#ef9a9a,stroke:#c62828,color:#000,stroke-width:2px
+```
+
+Reference: [`rtl/riscv_core.sv` lines 307–337](rtl/riscv_core.sv#L307-L337).
+
+### How a bubble actually gets inserted
+
+Every pipeline register (IF/ID, ID/EX, EX/MEM, MEM/WB) follows this exact
+same reset/flush/stall/latch pattern — shown here for the ID/EX register,
+the clearest example.
+
+```mermaid
+flowchart TD
+    CLK["Every clock edge"]:::pipe
+    CLK --> R{"!rst_n ?"}:::pipe
+    R -- "Yes" --> Z1["All control signals = 0<br/>valid_e = 0"]:::bad
+    R -- "No" --> F{"flush_e || stall_d ?"}:::pipe
+    F -- "Yes" --> Z2["Zero reg_we/mem_we/branch/<br/>jal/jalr/... -> a bubble<br/>valid_e = 0"]:::bad
+    F -- "No" --> P["Latch everything from the<br/>previous stage normally<br/>valid_e = valid_d"]:::good
+
+    classDef pipe fill:#90caf9,stroke:#1565c0,color:#000,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+    classDef bad fill:#ef9a9a,stroke:#c62828,color:#000,stroke-width:2px
+```
+
+Reference: [`rtl/riscv_core.sv` lines 224–253](rtl/riscv_core.sv#L224-L253).
+
+### The valid bit's journey to retire_valid
+
+This is how the pipeline tells the difference between "a real instruction
+finished" and "a bubble fell out the end" — the same valid-bit chain
+mentioned conceptually back in Section 4.
+
+```mermaid
+flowchart LR
+    VD["valid_d<br/>(0 if flush_d, else 1)"]:::s --> VE["valid_e<br/>(0 if flush_e||stall_d,<br/>else = valid_d)"]:::s
+    VE --> VM["valid_m<br/>= valid_e"]:::s
+    VM --> VW["valid_w<br/>= valid_m"]:::s
+    VW --> RV["retire_valid<br/>= valid_w"]:::good
+
+    classDef s fill:#fff9c4,stroke:#f57f17,color:#000,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+```
+
+Reference: [`rtl/riscv_core.sv` lines 84–100](rtl/riscv_core.sv#L84-L100),
+[224–253](rtl/riscv_core.sv#L224-L253),
+[339–366](rtl/riscv_core.sv#L339-L366),
+[375–408](rtl/riscv_core.sv#L375-L408).
+
+### The driver's run_phase, step by step
+
+```mermaid
+flowchart TD
+    A["Hold rst_n=0, clear memories<br/>(vif.mem_clear), wait 3 cycles"]:::drv
+    A --> B["Pull next randomized<br/>instruction from the sequencer"]:::gen
+    B --> C["Encode to a 32-bit word,<br/>backdoor-load into imem[idx]"]:::drv
+    C --> D["Broadcast the same item, in order,<br/>to the scoreboard's golden model"]:::gold
+    D --> E{"Was this<br/>the LAST_ITEM?"}:::drv
+    E -- "No" --> B
+    E -- "Yes" --> F["Pad 8 trailing NOPs,<br/>release reset (rst_n=1)"]:::drv
+    F --> G["Wait (loaded + drain_cycles)<br/>clock edges so the pipeline<br/>fully retires everything"]:::drv
+
+    classDef drv fill:#90caf9,stroke:#1565c0,color:#000,stroke-width:2px
+    classDef gen fill:#ce93d8,stroke:#6a1b9a,color:#000,stroke-width:2px
+    classDef gold fill:#fff59d,stroke:#f9a825,color:#000,stroke-width:2px
+```
+
+Reference: [`tb/riscv_agent.sv` lines 31–56](tb/riscv_agent.sv#L31-L56).
+
+### The monitor's sampling loop
+
+```mermaid
+flowchart LR
+    CLK["@(posedge vif.clk)"]:::mon --> Q{"rst_n &&<br/>retire_valid ?"}:::mon
+    Q -- "No" --> CLK
+    Q -- "Yes" --> CAP["Capture pc, rd, rd_we, rd_data,<br/>is_branch, branch_taken, is_store,<br/>mem_addr, mem_wdata, illegal"]:::good
+    CAP --> SEND["retire_ap.write(t) —<br/>broadcast to scoreboard + coverage"]:::good
+    SEND --> CLK
+
+    classDef mon fill:#80deea,stroke:#00838f,color:#000,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+```
+
+Reference: [`tb/riscv_agent.sv` lines 76–94](tb/riscv_agent.sv#L76-L94).
+
+### The scoreboard's checking chain (this project's "assertions")
+
+There's no `assert property` in this codebase — this comparison chain,
+run once per real retirement, is what actually catches bugs.
+
+```mermaid
+flowchart TD
+    W["write(obs) — called on every<br/>observed retirement"]:::judge
+    W --> P["predict(): golden model computes<br/>exp = what SHOULD have happened"]:::gold
+    P --> C1{"exp.pc === obs.pc ?"}:::judge
+    C1 -- "No" --> E1["uvm_error SB_PC"]:::bad
+    C1 -- "Yes" --> C2{"exp.rd_we == obs.rd_we ?"}:::judge
+    C2 -- "No" --> E2["uvm_error SB_WE"]:::bad
+    C2 -- "Yes, rd_we=1" --> C3{"exp.rd_data ===<br/>obs.rd_data ?"}:::judge
+    C3 -- "No" --> E3["uvm_error SB_DATA"]:::bad
+    C2 -- "Yes, rd_we=0" --> C4
+    C3 -- "Yes" --> C4{"exp.is_branch ==<br/>obs.is_branch ?"}:::judge
+    C4 -- "No" --> E4["uvm_error SB_BR"]:::bad
+    C4 -- "Yes" --> C5{"branch_taken<br/>matches too?"}:::judge
+    C5 -- "No" --> E5["uvm_error SB_BRT"]:::bad
+    C5 -- "Yes" --> C6{"is_store / store<br/>addr+data match?"}:::judge
+    C6 -- "No" --> E6["uvm_error SB_ST / SB_STD"]:::bad
+    C6 -- "Yes" --> C7{"illegal flag<br/>matches?"}:::judge
+    C7 -- "No" --> E7["uvm_error SB_ILL"]:::bad
+    C7 -- "Yes" --> OK["match_cnt++<br/>(every check passed)"]:::good
+
+    classDef judge fill:#e1bee7,stroke:#6a1b9a,color:#000,stroke-width:2px
+    classDef gold fill:#fff59d,stroke:#f9a825,color:#000,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+    classDef bad fill:#ef9a9a,stroke:#c62828,color:#000,stroke-width:2px
+```
+
+Reference: [`tb/riscv_scoreboard.sv` lines 134–173](tb/riscv_scoreboard.sv#L134-L173).
+
+### The golden model executing one instruction
+
+This is the software "answer key" CPU — no pipeline, no hazards, just a
+plain sequential interpreter.
+
+```mermaid
+flowchart TD
+    IDX["idx = golden_pc >> 2"]:::gold
+    IDX --> EX2{"golden_imem[idx]<br/>exists?"}:::gold
+    EX2 -- "No, past end of program" --> PAD["Treat as NOP<br/>golden_pc += 4"]:::neutral
+    EX2 -- "Yes" --> FETCH["Read rs1v/rs2v from<br/>golden_rf (software regfile)"]:::gold
+    FETCH --> KIND{"unique case (it.kind)"}:::gold
+    KIND -- "ALU op" --> ALU["Compute res in plain SV<br/>(+, -, &, |, ^, <<, >>, signed compare)"]:::good
+    KIND -- "LW / SW" --> MEMK["Read/write golden_dmem<br/>(a software associative array)"]:::good
+    KIND -- "Branch" --> BRK["Evaluate condition,<br/>set the golden target"]:::good
+    KIND -- "JAL / JALR" --> JK["res = golden_pc+4,<br/>target = jump address"]:::good
+    KIND -- "ILLEGAL" --> ILK["exp.illegal = 1"]:::bad
+    ALU --> WB2["Write res into golden_rf[rd]<br/>(only if rd_we && rd!=0)"]:::good
+    MEMK --> WB2
+    BRK --> WB2
+    JK --> WB2
+    ILK --> WB2
+    WB2 --> ADV["golden_pc = target<br/>ready for the next prediction"]:::gold
+
+    classDef gold fill:#fff59d,stroke:#f9a825,color:#000,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+    classDef bad fill:#ef9a9a,stroke:#c62828,color:#000,stroke-width:2px
+    classDef neutral fill:#eceff1,stroke:#607d8b,color:#000,stroke-width:2px
+```
+
+Reference: [`tb/riscv_scoreboard.sv` lines 49–132](tb/riscv_scoreboard.sv#L49-L132).
+
+### Which test runs which sequence
+
+```mermaid
+flowchart LR
+    T1["+UVM_TESTNAME=<br/>riscv_random_test"]:::gen --> S1["riscv_random_seq<br/>20-120 fully random instructions"]:::good
+    T2["+UVM_TESTNAME=<br/>riscv_hazard_test"]:::gen --> S2["riscv_hazard_seq<br/>RAW chain — every instruction<br/>reads the previous one's rd"]:::good
+    T3["+UVM_TESTNAME=<br/>riscv_branch_test"]:::gen --> S3["riscv_branch_seq<br/>ADDI setup + branch pairs,<br/>random taken / not-taken"]:::good
+    T4["+UVM_TESTNAME=<br/>riscv_exception_test"]:::gen --> S4["riscv_exception_seq<br/>1 in 5 instructions forced ILLEGAL"]:::good
+
+    classDef gen fill:#ce93d8,stroke:#6a1b9a,color:#000,stroke-width:2px
+    classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
+```
+
+Reference: [`tb/riscv_env.sv` lines 59–113](tb/riscv_env.sv#L59-L113) (test
+classes) and [`tb/riscv_sequences.sv`](tb/riscv_sequences.sv) (sequence
+bodies).
+
+---
+
 <div align="center">
 
 ### Happy exploring!
