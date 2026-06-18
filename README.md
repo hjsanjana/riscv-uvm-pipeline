@@ -1,7 +1,7 @@
 <div align="center">
 
-# 🚀 RISC-V Pipeline + UVM Verification
-### *A Beginner's Guide — taught like a friendly classroom lesson* 🎓
+# RISC-V Pipeline + UVM Verification
+### *A Beginner's Guide — taught like a friendly classroom lesson*
 
 ![Language](https://img.shields.io/badge/Language-SystemVerilog-1E3A8A?style=for-the-badge)
 ![ISA](https://img.shields.io/badge/ISA-RISC--V%20RV32I-0EA5E9?style=for-the-badge)
@@ -11,30 +11,30 @@
 
 </div>
 
-> 👋 Think of this README as a friendly teacher sitting next to you, explaining
+> Think of this README as a friendly teacher sitting next to you, explaining
 > what this project actually does — no jargon left unexplained, lots of
 > pictures, zero assumptions.
 
 ---
 
-## 🎨 Quick Color Key
+## Quick Color Key
 
 Throughout this guide, the same color always means the same thing — so once
 you learn the key, every diagram below becomes easier to read:
 
 | Color | Meaning |
 |:---:|---|
-| 🟣 **Purple** | Randomization / test generation |
-| 🔵 **Blue** | Fetching / driving input into the chip |
-| 🟢 **Green** | Decoding / a "good" or passing outcome |
-| 🟡 **Yellow** | Computing / the trusted "golden model" |
-| 🟠 **Orange** | Memory access / the hardware (the chip itself) |
-| 🔴 **Red** | Write-back / a hazard / a bug |
-| 🟦 **Teal** | Watching, monitoring, or checking results |
+| **Purple** | Randomization / test generation |
+| **Blue** | Fetching / driving input into the chip |
+| **Green** | Decoding / a "good" or passing outcome |
+| **Yellow** | Computing / the trusted "golden model" |
+| **Orange** | Memory access / the hardware (the chip itself) |
+| **Red** | Write-back / a hazard / a bug |
+| **Teal** | Watching, monitoring, or checking results |
 
 ---
 
-## 🧠 1. What is this project, in one sentence?
+## 1. What is this project, in one sentence?
 
 We built a tiny **CPU** (the part of a computer that runs instructions) using
 the **RISC-V** instruction set, and then we built a **robot tester** (using a
@@ -43,8 +43,8 @@ the CPU and check that it never makes a mistake.
 
 ```mermaid
 flowchart LR
-    A["🧮 CPU under test<br/>(riscv_core.sv)"]:::dut
-    B["🤖 UVM Testbench<br/>(checks the CPU)"]:::tb
+    A["CPU under test<br/>(riscv_core.sv)"]:::dut
+    B["UVM Testbench<br/>(checks the CPU)"]:::tb
     B == "feeds it instructions" ==> A
     A == "sends back results" ==> B
 
@@ -58,14 +58,14 @@ flowchart LR
 
 ---
 
-## 🏗️ 2. What is a CPU "pipeline"? (the core idea)
+## 2. What is a CPU "pipeline"? (the core idea)
 
-Imagine a sandwich shop 🥪 with **5 workers** standing in a line (an
+Imagine a sandwich shop with **5 workers** standing in a line (an
 assembly line), each doing exactly ONE job:
 
 ```mermaid
 flowchart LR
-    IF["🔵 IF<br/>Fetch the bread"]:::if --> ID["🟢 ID<br/>Decode the order"]:::id --> EX["🟡 EX<br/>Build the sandwich"]:::ex --> MEM["🟠 MEM<br/>Grab from the fridge"]:::mem --> WB["🔴 WB<br/>Hand to customer"]:::wb
+    IF["IF<br/>Fetch the bread"]:::if --> ID["ID<br/>Decode the order"]:::id --> EX["EX<br/>Build the sandwich"]:::ex --> MEM["MEM<br/>Grab from the fridge"]:::mem --> WB["WB<br/>Hand to customer"]:::wb
 
     classDef if fill:#42a5f5,color:#fff,stroke:#1565c0,stroke-width:2px
     classDef id fill:#66bb6a,color:#fff,stroke:#2e7d32,stroke-width:2px
@@ -78,22 +78,22 @@ In CPU terms, the 5 workers are the **5 pipeline stages**:
 
 | Stage | Nickname | What happens here |
 |:---:|---|---|
-| 🔵 **IF** | Fetch | Grab the next instruction from memory |
-| 🟢 **ID** | Decode | Figure out *what* the instruction wants (add? load? branch?) |
-| 🟡 **EX** | Execute | Do the math (the ALU lives here) |
-| 🟠 **MEM** | Memory | Read or write data memory (for LOAD/STORE) |
-| 🔴 **WB** | Write Back | Save the result into a register |
+| **IF** | Fetch | Grab the next instruction from memory |
+| **ID** | Decode | Figure out *what* the instruction wants (add? load? branch?) |
+| **EX** | Execute | Do the math (the ALU lives here) |
+| **MEM** | Memory | Read or write data memory (for LOAD/STORE) |
+| **WB** | Write Back | Save the result into a register |
 
 **Why a pipeline at all?** Because while Worker 5 finishes sandwich #1,
 Worker 1 has already started sandwich #2! Five sandwiches are "in flight"
-at once → much faster than finishing one start-to-finish before starting
+at once — much faster than finishing one start-to-finish before starting
 the next.
 
 ```
 Time →      1      2      3      4      5      6      7
-Instr 1   🔵IF    🟢ID    🟡EX    🟠MEM   🔴WB
-Instr 2          🔵IF    🟢ID    🟡EX    🟠MEM   🔴WB
-Instr 3                 🔵IF    🟢ID    🟡EX    🟠MEM   🔴WB
+Instr 1   [IF]   [ID]   [EX]   [MEM]  [WB]
+Instr 2          [IF]   [ID]   [EX]   [MEM]  [WB]
+Instr 3                 [IF]   [ID]   [EX]   [MEM]  [WB]
 ```
 
 > [!TIP]
@@ -104,9 +104,9 @@ Instr 3                 🔵IF    🟢ID    🟡EX    🟠MEM   🔴WB
 
 ---
 
-## ⚠️ 3. The 3 classic pipeline problems (and how we solved them)
+## 3. The 3 classic pipeline problems (and how we solved them)
 
-### 🅰️ Problem 1 — "I need a value that isn't ready yet!" → fixed with **Forwarding**
+### Problem 1 — "I need a value that isn't ready yet!" → fixed with **Forwarding**
 
 ```
  add  x1, x2, x3      ; x1 = x2 + x3   (result ready at end of EX)
@@ -116,25 +116,25 @@ Instr 3                 🔵IF    🟢ID    🟡EX    🟠MEM   🔴WB
 
 ```mermaid
 flowchart LR
-    I1["🅰️ add x1, x2, x3<br/>result ready in EX stage"]:::instr
-    RF["📦 Register File<br/>(updated later)"]:::slow
-    I2["🅱️ add x4, x1, x5<br/>needs x1 right now"]:::instr
+    I1["add x1, x2, x3<br/>result ready in EX stage"]:::instr
+    RF["Register File<br/>(updated later)"]:::slow
+    I2["add x4, x1, x5<br/>needs x1 right now"]:::instr
 
-    I1 -. "❌ too slow — not written yet" .-> RF
-    I1 == "✅ forwarded instantly<br/>via a shortcut wire" ==> I2
+    I1 -. "too slow — not written yet" .-> RF
+    I1 == "forwarded instantly<br/>via a shortcut wire" ==> I2
 
     classDef instr fill:#fff9c4,stroke:#f57f17,color:#000,stroke-width:2px
     classDef slow fill:#eceff1,stroke:#607d8b,color:#000,stroke-width:2px
 ```
 
-🩹 **Fix — Forwarding (a shortcut wire):** instead of waiting for the value
+**Fix — Forwarding (a shortcut wire):** instead of waiting for the value
 to be written to the register file and read back out, we **forward** it
 directly from a later stage straight into the EX stage that needs it — like
 passing a note directly to your friend instead of mailing it.
 
 This is the `fwd_a` / `fwd_b` logic inside [`rtl/riscv_core.sv`](rtl/riscv_core.sv).
 
-### 🅱️ Problem 2 — "I need a value from MEMORY, but memory is slow!" → fixed with a **Stall**
+### Problem 2 — "I need a value from MEMORY, but memory is slow!" → fixed with a **Stall**
 
 ```
  lw   x1, 0(x2)        ; load x1 from memory (result not ready until MEM stage)
@@ -143,9 +143,9 @@ This is the `fwd_a` / `fwd_b` logic inside [`rtl/riscv_core.sv`](rtl/riscv_core.
 
 ```mermaid
 flowchart LR
-    L["📥 lw x1, 0(x2)<br/>loads x1 from memory"]:::load
-    B["🫧 Stall bubble<br/>(1 wasted cycle)"]:::bubble
-    A["➕ add x3, x1, x4<br/>needs x1 too soon"]:::instr
+    L["lw x1, 0(x2)<br/>loads x1 from memory"]:::load
+    B["Stall bubble<br/>(1 wasted cycle)"]:::bubble
+    A["add x3, x1, x4<br/>needs x1 too soon"]:::instr
 
     L --> B --> A
 
@@ -154,16 +154,16 @@ flowchart LR
     classDef bubble fill:#eeeeee,stroke:#757575,color:#000,stroke-width:2px
 ```
 
-🛑 **Fix — Stall (a pause):** the pipeline detects this "load-use hazard"
+**Fix — Stall (a pause):** the pipeline detects this "load-use hazard"
 and inserts a 1-cycle **bubble** (a do-nothing instruction) to buy time.
 
 ```
- lw   x1, 0(x2)   🔵IF  🟢ID  🟡EX   🟠MEM  🔴WB
- add  x3, x1,x4         🔵IF  🟢ID  🫧stall 🟡EX   🟠MEM  🔴WB
+ lw   x1, 0(x2)   [IF]  [ID]  [EX]    [MEM]  [WB]
+ add  x3, x1,x4         [IF]  [ID]  [stall] [EX]   [MEM]  [WB]
                                      ^ pipeline pauses for 1 cycle
 ```
 
-### 🅲️ Problem 3 — "We guessed wrong about a branch!" → fixed with a **Flush**
+### Problem 3 — "We guessed wrong about a branch!" → fixed with a **Flush**
 
 ```
  beq  x1, x2, target   ; "if x1==x2, jump elsewhere"
@@ -176,13 +176,13 @@ away) them, like crossing out two wrong guesses on a quiz.
 
 ```mermaid
 flowchart TD
-    B["🔀 BEQ instruction<br/>resolved in EX stage"]:::branch
+    B["BEQ instruction<br/>resolved in EX stage"]:::branch
     D{"Branch taken?"}:::branch
     B --> D
-    D -- "No" --> N1["✅ Keep fetching normally"]:::good
-    D -- "Yes" --> F1["❌ Flush wrong guess #1"]:::bad
-    F1 --> F2["❌ Flush wrong guess #2"]:::bad
-    F2 --> C["✅ Fetch the correct target"]:::good
+    D -- "No" --> N1["Keep fetching normally"]:::good
+    D -- "Yes" --> F1["Flush wrong guess #1"]:::bad
+    F1 --> F2["Flush wrong guess #2"]:::bad
+    F2 --> C["Fetch the correct target"]:::good
 
     classDef branch fill:#ce93d8,stroke:#6a1b9a,color:#000,stroke-width:2px
     classDef bad fill:#ef9a9a,stroke:#c62828,color:#000,stroke-width:2px
@@ -190,15 +190,15 @@ flowchart TD
 ```
 
 ```
- beq ...           🔵IF  🟢ID  🟡EX  ← branch decided HERE
- (wrong guess #1)        🔵IF  🟢ID  ❌ flushed
- (wrong guess #2)              🔵IF  ❌ flushed
- (correct instr)                     🔵IF ✅ fetched from the right address
+ beq ...           [IF]  [ID]  [EX]  <- branch decided HERE
+ (wrong guess #1)        [IF]  [ID]  (flushed)
+ (wrong guess #2)              [IF]  (flushed)
+ (correct instr)                     [IF]  (fetched from the right address)
 ```
 
 ---
 
-## 🤖 4. What is UVM, and why do we need a "robot tester"?
+## 4. What is UVM, and why do we need a "robot tester"?
 
 **UVM** (Universal Verification Methodology) is a standard toolkit for
 building automated test systems for chips. Instead of you manually checking
@@ -209,21 +209,21 @@ Think of it like a **factory inspection line**:
 
 ```mermaid
 flowchart TD
-    subgraph GEN["🎲 Stimulus Generation"]
+    subgraph GEN["Stimulus Generation"]
         SEQ["Sequence<br/>(riscv_sequences.sv)"]
         TXN["Transaction<br/>(riscv_txn.sv)"]
         SEQ --> TXN
     end
 
-    subgraph DRIVE["🚚 Driving the DUT"]
+    subgraph DRIVE["Driving the DUT"]
         DRV["Driver<br/>(riscv_agent.sv)"]
     end
 
-    subgraph DESIGN["🧮 Design Under Test"]
+    subgraph DESIGN["Design Under Test"]
         DUT["riscv_core.sv<br/>5-stage pipeline"]
     end
 
-    subgraph CHECK["⚖️ Checking the Results"]
+    subgraph CHECK["Checking the Results"]
         MON["Monitor<br/>(riscv_agent.sv)"]
         SB["Scoreboard + Golden Model<br/>(riscv_scoreboard.sv)"]
         COV["Coverage<br/>(riscv_coverage.sv)"]
@@ -254,16 +254,16 @@ flowchart TD
 
 | Component | File | Beginner explanation |
 |-----------|------|------------------------|
-| 🟣 **Sequence** | [`tb/riscv_sequences.sv`](tb/riscv_sequences.sv) | Writes random (but legal-ish) RISC-V "mini programs" to test with |
-| 🟣 **Transaction** | [`tb/riscv_txn.sv`](tb/riscv_txn.sv) | One instruction, packaged as an object (opcode, registers, etc.) |
-| 🔵 **Driver** | [`tb/riscv_agent.sv`](tb/riscv_agent.sv) | Takes each instruction and loads it into the CPU's instruction memory |
-| 🟦 **Monitor** | [`tb/riscv_agent.sv`](tb/riscv_agent.sv) | Watches the CPU's outputs (the "retire bus") without interfering |
-| 🟦 **Scoreboard** | [`tb/riscv_scoreboard.sv`](tb/riscv_scoreboard.sv) | The judge — re-computes the expected answer in software and compares |
-| 🟦 **Coverage** | [`tb/riscv_coverage.sv`](tb/riscv_coverage.sv) | A checklist: "did we test ADD yet? BRANCH? STORE?" |
-| 🌍 **Environment** | [`tb/riscv_env.sv`](tb/riscv_env.sv) | The container that wires all the pieces above together |
-| 🔌 **Interface** | [`tb/riscv_if.sv`](tb/riscv_if.sv) | The literal wires connecting the testbench to the CPU |
+| **Sequence** | [`tb/riscv_sequences.sv`](tb/riscv_sequences.sv) | Writes random (but legal-ish) RISC-V "mini programs" to test with |
+| **Transaction** | [`tb/riscv_txn.sv`](tb/riscv_txn.sv) | One instruction, packaged as an object (opcode, registers, etc.) |
+| **Driver** | [`tb/riscv_agent.sv`](tb/riscv_agent.sv) | Takes each instruction and loads it into the CPU's instruction memory |
+| **Monitor** | [`tb/riscv_agent.sv`](tb/riscv_agent.sv) | Watches the CPU's outputs (the "retire bus") without interfering |
+| **Scoreboard** | [`tb/riscv_scoreboard.sv`](tb/riscv_scoreboard.sv) | The judge — re-computes the expected answer in software and compares |
+| **Coverage** | [`tb/riscv_coverage.sv`](tb/riscv_coverage.sv) | A checklist: "did we test ADD yet? BRANCH? STORE?" |
+| **Environment** | [`tb/riscv_env.sv`](tb/riscv_env.sv) | The container that wires all the pieces above together |
+| **Interface** | [`tb/riscv_if.sv`](tb/riscv_if.sv) | The literal wires connecting the testbench to the CPU |
 
-### What's a "retire bus"? 🎓
+### What's a "retire bus"?
 
 The CPU exposes a special set of signals (`retire_valid`, `retire_pc`,
 `retire_rd_data`, …) that fire **only when a real instruction has finished
@@ -272,9 +272,9 @@ sandwich as it leaves the shop.
 
 ```mermaid
 flowchart LR
-    P["⚙️ IF → ID → EX → MEM → WB<br/>pipeline stages"]:::pipe --> Q{"🏁 retire_valid<br/>= 1 ?"}:::pipe
-    Q -- "Yes — real instruction" --> M["🟦 Monitor captures it"]:::good
-    Q -- "No — just a bubble" --> X["🚫 Ignored"]:::bad
+    P["IF -> ID -> EX -> MEM -> WB<br/>pipeline stages"]:::pipe --> Q{"retire_valid<br/>= 1 ?"}:::pipe
+    Q -- "Yes — real instruction" --> M["Monitor captures it"]:::good
+    Q -- "No — just a bubble" --> X["Ignored"]:::bad
 
     classDef pipe fill:#fff9c4,stroke:#f57f17,color:#000,stroke-width:2px
     classDef good fill:#a5d6a7,stroke:#1b5e20,color:#000,stroke-width:2px
@@ -283,10 +283,9 @@ flowchart LR
 
 > [!IMPORTANT]
 > The monitor watches *only* this "finished!" stamp, so it never gets
-> confused by pipeline bubbles — the 🫧 stalls and ❌ flushes from
-> Section 3.
+> confused by pipeline bubbles — the stalls and flushes from Section 3.
 
-### What's a "golden model"? 🏆
+### What's a "golden model"?
 
 It's a much simpler program (just normal code, not hardware) that does the
 *same job* as the CPU — execute RISC-V instructions — but written to be
@@ -295,10 +294,10 @@ obviously correct, even if it's slow. We trust it 100%, and use it as the
 
 ```mermaid
 flowchart LR
-    R["🧮 Real CPU's answer"]:::dut --> CMP{"Are they<br/>the same?"}:::judge
-    G["🏆 Golden Model's answer"]:::gold --> CMP
-    CMP -- "✅ Yes" --> PASS["Pass"]:::good
-    CMP -- "❌ No" --> FAIL["Fail"]:::bad
+    R["Real CPU's answer"]:::dut --> CMP{"Are they<br/>the same?"}:::judge
+    G["Golden Model's answer"]:::gold --> CMP
+    CMP -- "Yes" --> PASS["Pass"]:::good
+    CMP -- "No" --> FAIL["Fail"]:::bad
 
     classDef dut fill:#ffcc80,stroke:#e65100,color:#000,stroke-width:2px
     classDef gold fill:#fff59d,stroke:#f9a825,color:#000,stroke-width:2px
@@ -315,42 +314,42 @@ flowchart LR
 
 ---
 
-## 🗂️ 5. Project map
+## 5. Project map
 
 ```
 riscv-uvm-pipeline/
 │
-├── rtl/                      🔧 The actual hardware design
-│   ├── riscv_core.sv          → the 5-stage CPU itself
-│   └── riscv_top.sv           → a thin wrapper connecting the CPU to the testbench wires
+├── rtl/                      The actual hardware design
+│   ├── riscv_core.sv          -> the 5-stage CPU itself
+│   └── riscv_top.sv           -> a thin wrapper connecting the CPU to the testbench wires
 │
-├── tb/                       🧪 The UVM testbench ("robot tester")
-│   ├── riscv_if.sv             → wires between CPU and testbench
-│   ├── riscv_pkg.sv            → glues all testbench files together
-│   ├── riscv_txn.sv            → "one instruction" data packet
-│   ├── riscv_agent.sv          → driver + monitor
-│   ├── riscv_scoreboard.sv     → the judge / golden model
-│   ├── riscv_coverage.sv       → the checklist
-│   ├── riscv_sequences.sv      → the random test generators
-│   ├── riscv_env.sv            → wires the testbench pieces together
-│   └── riscv_tb_top.sv         → the very top — starts the whole simulation
+├── tb/                       The UVM testbench ("robot tester")
+│   ├── riscv_if.sv             -> wires between CPU and testbench
+│   ├── riscv_pkg.sv            -> glues all testbench files together
+│   ├── riscv_txn.sv            -> "one instruction" data packet
+│   ├── riscv_agent.sv          -> driver + monitor
+│   ├── riscv_scoreboard.sv     -> the judge / golden model
+│   ├── riscv_coverage.sv       -> the checklist
+│   ├── riscv_sequences.sv      -> the random test generators
+│   ├── riscv_env.sv            -> wires the testbench pieces together
+│   └── riscv_tb_top.sv         -> the very top — starts the whole simulation
 │
 └── sim/
-    └── files.f                 → list of files to compile, for simulators like VCS
+    └── files.f                 -> list of files to compile, for simulators like VCS
 ```
 
 ---
 
-## 🎮 6. How to actually run it
+## 6. How to actually run it
 
 ```mermaid
 flowchart TD
-    Start{"🤔 Do you have<br/>VCS / Questa<br/>installed locally?"}:::q
-    Start -- "No" --> Play["🌐 Use EDA Playground<br/>(free, browser-based)"]:::easy
-    Start -- "Yes" --> Local["💻 Run locally with<br/>vcs / questa + files.f"]:::adv
-    Play --> Pick["🎯 Pick a UVM_TESTNAME<br/>and click Run"]:::action
-    Local --> Pick2["🎯 Pass +UVM_TESTNAME=...<br/>on the command line"]:::action
-    Pick --> Result["✅ *** TEST PASSED ***"]:::good
+    Start{"Do you have<br/>VCS / Questa<br/>installed locally?"}:::q
+    Start -- "No" --> Play["Use EDA Playground<br/>(free, browser-based)"]:::easy
+    Start -- "Yes" --> Local["Run locally with<br/>vcs / questa + files.f"]:::adv
+    Play --> Pick["Pick a UVM_TESTNAME<br/>and click Run"]:::action
+    Local --> Pick2["Pass +UVM_TESTNAME=...<br/>on the command line"]:::action
+    Pick --> Result["*** TEST PASSED ***"]:::good
     Pick2 --> Result
 
     classDef q fill:#ce93d8,stroke:#6a1b9a,color:#000,stroke-width:2px
@@ -361,7 +360,7 @@ flowchart TD
 ```
 
 <details>
-<summary>🌐 <b>Option A — EDA Playground</b> (click to expand steps)</summary>
+<summary><b>Option A — EDA Playground</b> (click to expand steps)</summary>
 
 1. Go to **edaplayground.com** and create a new playground.
 2. Under *Tools & Simulators*: pick **Synopsys VCS**, language
@@ -378,10 +377,10 @@ flowchart TD
    +UVM_TESTNAME=riscv_random_test
    ```
    Other tests you can try:
-   - `riscv_hazard_test` 🫧 (stress-tests stalls/forwarding)
-   - `riscv_branch_test` 🔀 (stress-tests branches/flushes)
-   - `riscv_exception_test` 💥 (stress-tests illegal instructions)
-7. Click **Run** ▶️. Look for:
+   - `riscv_hazard_test` (stress-tests stalls/forwarding)
+   - `riscv_branch_test` (stress-tests branches/flushes)
+   - `riscv_exception_test` (stress-tests illegal instructions)
+7. Click **Run**. Look for:
    ```
    *** TEST PASSED ***
    matches=N mismatches=0
@@ -395,7 +394,7 @@ flowchart TD
 </details>
 
 <details>
-<summary>💻 <b>Option B — Run locally</b> (if you already have VCS/Questa)</summary>
+<summary><b>Option B — Run locally</b> (if you already have VCS/Questa)</summary>
 
 ```bash
 cd sim
@@ -410,20 +409,20 @@ vcs -sverilog -ntb_opts uvm-1.2 -f files.f -timescale=1ns/1ps -o simv
 
 ---
 
-## 🌈 7. The big picture, one more time
+## 7. The big picture, one more time
 
 ```mermaid
 flowchart TD
-    A["🎲 Random instructions generated"]:::gen
-    A --> B["🚚 Driver loads them into the CPU"]:::drv
-    B --> C["🔧 5-stage pipeline executes them<br/>(forwarding fixes data hazards,<br/>stalls fix load-use hazards,<br/>flushes fix wrong branch guesses)"]:::dut
-    C --> D["🏁 Each finished instruction retires"]:::retire
-    D --> E["🟦 Monitor records<br/>what really happened"]:::mon
-    D --> F["🏆 Golden model predicts<br/>what should happen"]:::gold
-    E --> G{"⚖️ Scoreboard compares"}:::judge
+    A["Random instructions generated"]:::gen
+    A --> B["Driver loads them into the CPU"]:::drv
+    B --> C["5-stage pipeline executes them<br/>(forwarding fixes data hazards,<br/>stalls fix load-use hazards,<br/>flushes fix wrong branch guesses)"]:::dut
+    C --> D["Each finished instruction retires"]:::retire
+    D --> E["Monitor records<br/>what really happened"]:::mon
+    D --> F["Golden model predicts<br/>what should happen"]:::gold
+    E --> G{"Scoreboard compares"}:::judge
     F --> G
-    G -- "✅ match" --> H["🎉 CPU is correct so far"]:::good
-    G -- "❌ mismatch" --> I["🐞 Bug found — investigate!"]:::bad
+    G -- "Match" --> H["CPU is correct so far"]:::good
+    G -- "Mismatch" --> I["Bug found — investigate!"]:::bad
 
     classDef gen fill:#ce93d8,stroke:#6a1b9a,color:#000,stroke-width:2px
     classDef drv fill:#90caf9,stroke:#1565c0,color:#000,stroke-width:2px
@@ -437,13 +436,13 @@ flowchart TD
 ```
 
 That's it! You now understand:
-- 🏗️ what a 5-stage pipeline is and why it's fast
-- ⚠️ the 3 classic pipeline problems (forwarding, stalling, flushing)
-- 🤖 what UVM is and what each piece (driver/monitor/scoreboard/coverage) does
-- 🎮 how to actually run the simulation yourself
+- what a 5-stage pipeline is and why it's fast
+- the 3 classic pipeline problems (forwarding, stalling, flushing)
+- what UVM is and what each piece (driver/monitor/scoreboard/coverage) does
+- how to actually run the simulation yourself
 
 <div align="center">
 
-### Happy exploring! 🎉
+### Happy exploring!
 
 </div>
